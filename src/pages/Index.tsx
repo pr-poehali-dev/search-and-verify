@@ -141,16 +141,84 @@ function findHistory(v: string) {
   );
 }
 
+// Расчёт степени опасности контакта
+const CRITICAL_REASONS = ['Угрожает', 'Уже перевели деньги'];
+const HIGH_REASONS = ['Просит деньги', 'Использует слово «груз»', 'Уже перевели деньги'];
+
+type DangerLevel = 'Низкая' | 'Средняя' | 'Высокая' | 'Критическая';
+
+function computeDanger(params: {
+  reasons: string[];
+  vkMonths?: number;
+  inStopList?: boolean;
+  historyCount?: number;
+}): { level: DangerLevel; score: number } {
+  const { reasons, vkMonths, inStopList, historyCount } = params;
+  let score = 0;
+
+  reasons.forEach((r) => {
+    if (CRITICAL_REASONS.includes(r)) score += 3;
+    else if (HIGH_REASONS.includes(r)) score += 2;
+    else score += 1;
+  });
+
+  if (vkMonths !== undefined && vkMonths < 3) score += vkMonths < 1 ? 3 : 2;
+  if (inStopList) score += 5;
+  if (historyCount && historyCount > 0) score += Math.min(historyCount, 3);
+
+  let level: DangerLevel = 'Низкая';
+  if (score >= 8) level = 'Критическая';
+  else if (score >= 5) level = 'Высокая';
+  else if (score >= 2) level = 'Средняя';
+
+  return { level, score };
+}
+
+const DANGER_STYLES: Record<DangerLevel, { bar: string; text: string; desc: string; icon: string }> = {
+  'Низкая': { bar: 'bg-emerald-500', text: 'text-emerald-400', desc: 'Один-два незначительных признака. Явных угроз не выявлено.', icon: 'ShieldCheck' },
+  'Средняя': { bar: 'bg-yellow-500', text: 'text-yellow-400', desc: 'Несколько признаков одновременно — стоит проверить внимательнее.', icon: 'ShieldQuestion' },
+  'Высокая': { bar: 'bg-orange-500', text: 'text-orange-400', desc: 'Серьёзные признаки, похоже на мошенническую схему.', icon: 'ShieldAlert' },
+  'Критическая': { bar: 'bg-destructive', text: 'text-destructive', desc: 'Угрозы, требование денег или уже пострадавшие люди. Действуйте немедленно.', icon: 'ShieldX' },
+};
+
+// Демо-база заявок на розыск для поиска похожих
+const SEARCH_REQUESTS = [
+  { id: '№ 10231', name: 'Иванов Сергей Петрович', tag: 'позывной «Сокол»', date: '18.05.2026', status: 'В работе' },
+  { id: '№ 10198', name: 'Иванов Сергей П.', tag: 'жетон 45872', date: '02.05.2026', status: 'Проверен' },
+  { id: '№ 9876', name: 'Петров Алексей Иванович', tag: '3 мотострелковая бригада', date: '20.04.2026', status: 'Закрыто' },
+];
+
+function findSimilarRequests(query: string) {
+  const q = query.toLowerCase().trim();
+  if (q.length < 3) return [];
+  const parts = q.split(/\s+/);
+  return SEARCH_REQUESTS.filter((r) => {
+    const target = r.name.toLowerCase();
+    return parts.some((p) => target.includes(p)) || target.includes(q);
+  });
+}
+
 const Index = () => {
   const [probeValue, setProbeValue] = useState('');
   const [reasons, setReasons] = useState<string[]>([]);
   const [stopSearch, setStopSearch] = useState('');
   const [foundCount] = useState(47);
   const [foundOpen, setFoundOpen] = useState(false);
+  const [searchName, setSearchName] = useState('');
+  const similarRequests = findSimilarRequests(searchName);
   const detected = detectType(probeValue);
   const regionInfo = detected === 'Номер телефона' ? detectRegion(probeValue) : null;
   const vkAge = detected === 'Ссылка на профиль' ? detectVkAge(probeValue) : null;
   const history = probeValue.trim().length > 4 ? findHistory(probeValue) : undefined;
+  const danger =
+    probeValue.trim().length > 3 || reasons.length > 0
+      ? computeDanger({
+          reasons,
+          vkMonths: vkAge?.months,
+          inStopList: history?.inStopList,
+          historyCount: history?.checks.length,
+        })
+      : null;
 
   const toggleReason = (r: string) =>
     setReasons((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
@@ -381,6 +449,33 @@ const Index = () => {
             </div>
 
             <Textarea placeholder="Другое — опишите ситуацию" className="mt-4 min-h-[70px]" />
+
+            {/* Степень опасности */}
+            {danger && (
+              <div className="mt-5 rounded-lg border border-border bg-secondary/30 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="flex items-center gap-2 text-sm font-500">
+                    <Icon name={DANGER_STYLES[danger.level].icon} size={17} className={DANGER_STYLES[danger.level].text} />
+                    Степень опасности
+                  </p>
+                  <span className={`font-display text-sm font-600 ${DANGER_STYLES[danger.level].text}`}>{danger.level}</span>
+                </div>
+                <div className="mt-3 flex gap-1.5">
+                  {(['Низкая', 'Средняя', 'Высокая', 'Критическая'] as DangerLevel[]).map((lvl, i) => {
+                    const order: DangerLevel[] = ['Низкая', 'Средняя', 'Высокая', 'Критическая'];
+                    const active = order.indexOf(danger.level) >= i;
+                    return (
+                      <div
+                        key={lvl}
+                        className={`h-2 flex-1 rounded-full transition-colors ${active ? DANGER_STYLES[danger.level].bar : 'bg-muted'}`}
+                      />
+                    );
+                  })}
+                </div>
+                <p className="mt-2.5 text-xs text-muted-foreground">{DANGER_STYLES[danger.level].desc}</p>
+              </div>
+            )}
+
             <Input placeholder="Ваш контакт для обратной связи" className="mt-3 h-11" />
 
             <label className="mt-4 flex cursor-pointer items-start gap-2.5 text-xs text-muted-foreground">
@@ -403,6 +498,40 @@ const Index = () => {
             Заполните данные волонтёра, заявителя и разыскиваемого: ФИО, позывной,
             номер жетона, часть, обстоятельства, приметы, фото. Подключаем розыск.
           </p>
+
+          <label className="mt-5 block text-sm font-500">ФИО разыскиваемого</label>
+          <Input
+            value={searchName}
+            onChange={(e) => setSearchName(e.target.value)}
+            placeholder="Начните вводить — попробуйте «Иванов»"
+            className="mt-1.5 h-11"
+          />
+
+          {similarRequests.length > 0 && (
+            <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
+              <p className="flex items-center gap-2 text-sm font-500 text-primary">
+                <Icon name="Users" size={16} /> Найдены похожие заявки
+              </p>
+              <ul className="mt-3 space-y-2">
+                {similarRequests.map((r) => (
+                  <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm">
+                    <div>
+                      <span className="font-500">{r.id}</span>{' '}
+                      <span className="text-muted-foreground">{r.name} · {r.tag}</span>
+                      <p className="text-xs text-muted-foreground">{r.date}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={r.status === 'Закрыто' ? 'secondary' : 'default'} className="text-[11px]">{r.status}</Badge>
+                      <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-primary hover:text-primary">
+                        Связаться с заявителем
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="mt-5 flex flex-wrap gap-3">
             <Button variant="secondary">Заполнить заявку на поиск</Button>
             <Button variant="outline" className="border-primary/40 text-primary hover:text-primary" onClick={() => setFoundOpen(true)}>

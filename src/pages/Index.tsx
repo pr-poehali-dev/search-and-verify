@@ -5,6 +5,14 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 
 const DIRECTIONS = [
   {
@@ -59,11 +67,90 @@ function detectType(v: string): string {
   return 'Имя / ФИО';
 }
 
+// Определение региона и оператора по коду мобильного номера (DEF-код)
+const DEF_CODES: Record<string, { region: string; operator: string }> = {
+  '900': { region: 'Ростовская область', operator: 'Билайн' },
+  '901': { region: 'Москва и область', operator: 'Билайн' },
+  '903': { region: 'Москва и область', operator: 'Билайн' },
+  '905': { region: 'Краснодарский край', operator: 'Билайн' },
+  '906': { region: 'Санкт-Петербург', operator: 'Билайн' },
+  '909': { region: 'Ростовская область', operator: 'Билайн' },
+  '910': { region: 'Тульская область', operator: 'МТС' },
+  '911': { region: 'Санкт-Петербург', operator: 'МегаФон' },
+  '915': { region: 'Москва и область', operator: 'МТС' },
+  '916': { region: 'Москва и область', operator: 'МТС' },
+  '918': { region: 'Краснодарский край', operator: 'МТС' },
+  '919': { region: 'Свердловская область', operator: 'МТС' },
+  '920': { region: 'Брянская область', operator: 'МегаФон' },
+  '921': { region: 'Санкт-Петербург', operator: 'МегаФон' },
+  '922': { region: 'Пермский край', operator: 'МегаФон' },
+  '923': { region: 'Новосибирская область', operator: 'МегаФон' },
+  '928': { region: 'Ростовская область', operator: 'МегаФон' },
+  '929': { region: 'Москва и область', operator: 'МегаФон' },
+  '937': { region: 'Самарская область', operator: 'Tele2' },
+  '938': { region: 'Ростовская область', operator: 'Tele2' },
+  '950': { region: 'Кемеровская область', operator: 'Tele2' },
+  '951': { region: 'Ростовская область', operator: 'Tele2' },
+  '952': { region: 'Тюменская область', operator: 'Tele2' },
+  '958': { region: 'Москва и область', operator: 'Виртуальный (MVNO)' },
+  '960': { region: 'Воронежская область', operator: 'Билайн' },
+  '961': { region: 'Ростовская область', operator: 'МегаФон' },
+  '962': { region: 'Ростовская область', operator: 'Билайн' },
+  '963': { region: 'Самарская область', operator: 'МТС' },
+  '977': { region: 'Москва и область', operator: 'Yota' },
+  '980': { region: 'Воронежская область', operator: 'МТС' },
+  '988': { region: 'Краснодарский край', operator: 'МТС' },
+  '999': { region: 'Москва и область', operator: 'Yota' },
+};
+
+function detectRegion(v: string): { region: string; operator: string } | null {
+  const digits = v.replace(/\D/g, '');
+  let normalized = digits;
+  if (normalized.length === 11 && (normalized[0] === '7' || normalized[0] === '8')) {
+    normalized = normalized.slice(1);
+  }
+  if (normalized.length !== 10) return null;
+  const code = normalized.slice(0, 3);
+  return DEF_CODES[code] || { region: 'Регион не определён', operator: 'Оператор не определён' };
+}
+
+// Демо-проверка возраста профиля ВК по числовому id (чем больше id — тем свежее)
+function detectVkAge(v: string): { created: string; months: number } | null {
+  if (!/^(https?:\/\/)?(vk\.com|t\.me|telegram)/i.test(v.trim())) return null;
+  const idMatch = v.match(/id(\d+)/i);
+  const seed = idMatch ? parseInt(idMatch[1], 10) : v.length * 37;
+  const months = seed % 60; // 0..59 месяцев
+  const d = new Date();
+  d.setMonth(d.getMonth() - months);
+  const created = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  return { created, months };
+}
+
+// Демо-история прошлых проверок этого контакта
+const CHECK_HISTORY: { key: string; checks: { date: string; result: string }[]; related: number; inStopList: boolean }[] = [
+  { key: '79001112233', checks: [{ date: '12.06.2026', result: 'Мошенник' }, { date: '02.06.2026', result: 'Под вопросом' }], related: 3, inStopList: true },
+  { key: 'vk.com/id000000', checks: [{ date: '12.06.2026', result: 'Мошенник' }], related: 2, inStopList: true },
+  { key: '79215550011', checks: [{ date: '03.06.2026', result: 'Мошенник' }], related: 1, inStopList: true },
+];
+
+function findHistory(v: string) {
+  const digits = v.replace(/\D/g, '');
+  const q = v.toLowerCase().trim();
+  return CHECK_HISTORY.find(
+    (h) => (digits.length >= 10 && h.key.replace(/\D/g, '').includes(digits)) || (q.length > 4 && h.key.toLowerCase().includes(q)),
+  );
+}
+
 const Index = () => {
   const [probeValue, setProbeValue] = useState('');
   const [reasons, setReasons] = useState<string[]>([]);
   const [stopSearch, setStopSearch] = useState('');
+  const [foundCount] = useState(47);
+  const [foundOpen, setFoundOpen] = useState(false);
   const detected = detectType(probeValue);
+  const regionInfo = detected === 'Номер телефона' ? detectRegion(probeValue) : null;
+  const vkAge = detected === 'Ссылка на профиль' ? detectVkAge(probeValue) : null;
+  const history = probeValue.trim().length > 4 ? findHistory(probeValue) : undefined;
 
   const toggleReason = (r: string) =>
     setReasons((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
@@ -118,6 +205,15 @@ const Index = () => {
               Единая точка входа для подачи заявок на поиск пропавших, пленных, погибших
               и раненых в зоне СВО — и для проверки тех, кто предлагает «помощь» за деньги.
             </p>
+
+            <div className="mt-8 inline-flex items-center gap-4 rounded-xl border border-primary/30 bg-primary/10 px-6 py-4">
+              <Icon name="UserRoundCheck" size={34} className="text-primary" />
+              <div>
+                <p className="font-display text-4xl font-700 leading-none text-primary">{foundCount}</p>
+                <p className="mt-1 text-sm text-muted-foreground">человек помогли найти</p>
+              </div>
+            </div>
+
             <div className="mt-8 flex flex-wrap gap-3">
               <Button size="lg" onClick={() => scrollTo('probe')}>
                 <Icon name="ShieldAlert" size={18} className="mr-2" /> Проверить контакт
@@ -213,6 +309,67 @@ const Index = () => {
               )}
             </div>
 
+            {/* Регион и оператор по номеру */}
+            {regionInfo && (
+              <div className="mt-2 flex items-center gap-2 rounded-md border border-border bg-secondary/40 px-3 py-2 text-sm">
+                <Icon name="MapPin" size={15} className="text-primary" />
+                <span className="text-muted-foreground">
+                  Регион: <span className="text-foreground">{regionInfo.region}</span> · Оператор:{' '}
+                  <span className="text-foreground">{regionInfo.operator}</span>
+                </span>
+              </div>
+            )}
+
+            {/* Возраст профиля ВК */}
+            {vkAge && (
+              <div
+                className={`mt-2 flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${
+                  vkAge.months < 1
+                    ? 'border-destructive/50 bg-destructive/10 text-destructive'
+                    : vkAge.months < 3
+                      ? 'border-orange-500/50 bg-orange-500/10 text-orange-400'
+                      : 'border-border bg-secondary/40 text-muted-foreground'
+                }`}
+              >
+                <Icon name={vkAge.months < 3 ? 'TriangleAlert' : 'CalendarClock'} size={15} className="mt-0.5" />
+                <span>
+                  Страница создана: <span className="font-500">{vkAge.created}</span>. Возраст профиля:{' '}
+                  {vkAge.months === 0 ? 'меньше месяца' : `${vkAge.months} мес.`}
+                  {vkAge.months < 3 && <span className="block font-500">Свежий профиль — признак мошенника</span>}
+                </span>
+              </div>
+            )}
+
+            {/* Стоп-лист: срочное предупреждение */}
+            {history?.inStopList && (
+              <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/60 bg-destructive/15 px-3 py-2.5 text-sm text-destructive">
+                <Icon name="OctagonAlert" size={16} className="mt-0.5" />
+                <span className="font-500">Внимание! Этот контакт уже в стоп-листе мошенников.</span>
+              </div>
+            )}
+
+            {/* История проверок по контакту */}
+            {history && (
+              <div className="mt-2 rounded-md border border-border bg-secondary/30 px-3 py-2.5 text-sm">
+                <p className="flex items-center gap-2 font-500">
+                  <Icon name="History" size={15} className="text-primary" /> История проверок
+                </p>
+                <ul className="mt-2 space-y-1 text-muted-foreground">
+                  {history.checks.map((c, i) => (
+                    <li key={i} className="flex items-center justify-between">
+                      <span>{c.date}</span>
+                      <Badge variant={c.result === 'Мошенник' ? 'destructive' : 'secondary'} className="text-[11px]">
+                        {c.result}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Проверяли раз: {history.checks.length} · Связанных заявок: {history.related}
+                </p>
+              </div>
+            )}
+
             <p className="mt-6 text-sm font-500">Что вызывает подозрение?</p>
             <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
               {REASONS.map((r) => (
@@ -246,7 +403,12 @@ const Index = () => {
             Заполните данные волонтёра, заявителя и разыскиваемого: ФИО, позывной,
             номер жетона, часть, обстоятельства, приметы, фото. Подключаем розыск.
           </p>
-          <Button variant="secondary" className="mt-5">Заполнить заявку на поиск</Button>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button variant="secondary">Заполнить заявку на поиск</Button>
+            <Button variant="outline" className="border-primary/40 text-primary hover:text-primary" onClick={() => setFoundOpen(true)}>
+              <Icon name="CircleCheckBig" size={16} className="mr-2" /> Человек найден
+            </Button>
+          </div>
         </div>
         <div id="support" className="rounded-xl border border-border bg-card/60 p-8">
           <Icon name="HeartHandshake" size={28} className="text-primary" />
@@ -335,6 +497,57 @@ const Index = () => {
           </div>
         </div>
       </section>
+
+      {/* MODAL: Человек найден */}
+      <Dialog open={foundOpen} onOpenChange={setFoundOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <Icon name="CircleCheckBig" size={24} />
+            </div>
+            <DialogTitle className="font-display text-2xl">Человек найден</DialogTitle>
+            <DialogDescription>
+              Заполните форму — заявка закроется с пометкой «найден», а счётчик на главной обновится автоматически.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-2">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <label className="text-sm font-500">Номер заявки</label>
+                <Input placeholder="№ 000000" className="mt-1.5" />
+              </div>
+              <div>
+                <label className="text-sm font-500">Дата, когда нашли</label>
+                <Input type="date" className="mt-1.5" />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-500">Имя заявителя</label>
+              <Input placeholder="Кто подавал заявку" className="mt-1.5" />
+            </div>
+            <div>
+              <label className="text-sm font-500">Имя найденного</label>
+              <Input placeholder="ФИО или позывной" className="mt-1.5" />
+            </div>
+            <div>
+              <label className="text-sm font-500">Где нашли или кто помог</label>
+              <Input placeholder="Госпиталь, часть, волонтёр…" className="mt-1.5" />
+            </div>
+            <div>
+              <label className="text-sm font-500">Комментарий</label>
+              <Textarea placeholder="Детали и обстоятельства" className="mt-1.5 min-h-[80px]" />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setFoundOpen(false)}>Отмена</Button>
+            <Button onClick={() => setFoundOpen(false)}>
+              <Icon name="Check" size={16} className="mr-2" /> Подтвердить
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* FOOTER */}
       <footer className="border-t border-border/60 bg-card/40">
